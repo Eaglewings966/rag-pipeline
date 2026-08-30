@@ -3,354 +3,293 @@
 # Production RAG Pipeline
 
 [![CI](https://github.com/Eaglewings966/rag-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/Eaglewings966/rag-pipeline/actions/workflows/ci.yml)
-[![Kubernetes](https://img.shields.io/badge/Kubernetes-1.29-326CE5?style=flat-square&logo=kubernetes&logoColor=white)](https://kubernetes.io/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-EKS_1.29-326CE5?style=flat-square&logo=kubernetes&logoColor=white)](https://kubernetes.io/)
 [![Terraform](https://img.shields.io/badge/Terraform-1.5+-7B42BC?style=flat-square&logo=terraform&logoColor=white)](https://www.terraform.io/)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
+[![AWS](https://img.shields.io/badge/AWS-EKS_%2B_Qdrant-FF9900?style=flat-square&logo=amazonaws&logoColor=white)](https://aws.amazon.com/)
 
-**A production-grade Retrieval-Augmented Generation pipeline on AWS EKS.
-Documents in S3. Embeddings in Qdrant. Auth, rate limiting, and mTLS
-throughout. GitOps via Argo CD. Metrics that show you what the LLM
-actually costs.**
+**A production-minded document intelligence platform: secure documents in, grounded answers out.**
 
-[📖 Deep-dive article](https://emmanuelubani.hashnode.dev) •
-[🎥 Build walkthrough](https://youtube.com/@techwithemma) •
-[💼 LinkedIn](https://linkedin.com/in/ubaniemmanuel) •
-[🌐 Portfolio](https://ops-run.lovable.app)
+S3 documents are chunked and embedded locally, stored in Qdrant, retrieved by a FastAPI service, and answered by Claude through LangChain. The surrounding platform handles the parts a demo usually skips: authentication, rate limits, private Kubernetes networking, GitOps, observability, and infrastructure as code.
 
-<br/>
+[Architecture](#architecture) · [Quick start](#quick-start) · [Deployment](#aws-eks-deployment) · [Screenshots](#portfolio-screenshot-checklist)
 
-![Architecture](docs/architecture/architecture.png)
+![Production RAG Pipeline architecture](docs/architecture/architecture.png)
 
 </div>
 
 ---
 
-## Table of Contents
+## The problem
 
-- [Why This Exists](#why-this-exists)
-- [Who Uses It](#who-uses-it)
-- [Tech Stack](#tech-stack)
-- [Request Flow](#request-flow)
-- [Architecture](#architecture)
-- [Security — Defense in Depth](#security--defense-in-depth)
-- [Autoscaling](#autoscaling)
-- [Observability](#observability)
-- [What's Implemented](#whats-implemented)
-- [Directory Structure](#directory-structure)
-- [Deployment](#deployment)
+Most RAG examples stop after vector search and one LLM call. That is useful for learning, but it leaves the real operating questions unanswered: **who can call it, how is usage controlled, where do secrets live, how is it deployed, and what does each answer cost?**
 
----
+This project is an end-to-end answer to those questions. It is a practical reference architecture for an AI infrastructure engineer building a document Q&A API that is observable, secure by default, and designed to evolve beyond a local proof of concept.
 
-## Why This Exists
+## What happens when someone asks a question?
 
-Every enterprise team building with LLMs eventually needs a document
-Q&A system. The naive path — API key in an env var, no auth, no rate
-limiting, no observability — works for demos and fails in production.
-This pipeline shows what the production version actually requires.
-
----
-
-## Who Uses It
-
-- **API consumers** — query a knowledge base using POST /query with
-  an API key; receive answers grounded in real documents with sources
-- **Platform engineers** — deploy and operate via GitOps; every change
-  goes through Argo CD sync waves; infrastructure is Terraform-managed
-- **Security teams** — seven defense-in-depth layers; no static AWS
-  credentials anywhere; mTLS between all pods; API keys from Secrets
-  Manager via IRSA
-
----
-
-## Tech Stack
-
-**Cloud and Orchestration**
-
-![AWS](https://img.shields.io/badge/AWS-EKS_EC2-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
-![Kubernetes](https://img.shields.io/badge/Kubernetes-1.29-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
-![Argo CD](https://img.shields.io/badge/Argo_CD-GitOps-EF7B4D?style=flat-square)
-![Terraform](https://img.shields.io/badge/Terraform-1.5+-7B42BC?style=flat-square&logo=terraform&logoColor=white)
-
-**Language and Framework**
-
-![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688?style=flat-square&logo=fastapi&logoColor=white)
-![LangChain](https://img.shields.io/badge/LangChain-0.1-1C3C3C?style=flat-square)
-
-**AI and Vector Storage**
-
-![Claude](https://img.shields.io/badge/Claude-claude--sonnet--4--6-7B42BC?style=flat-square)
-![Qdrant](https://img.shields.io/badge/Qdrant-1.9-FF4081?style=flat-square)
-![HuggingFace](https://img.shields.io/badge/HuggingFace-Embeddings-FFD21E?style=flat-square)
-
-**Security and Service Mesh**
-
-![Linkerd](https://img.shields.io/badge/Linkerd-mTLS-2BEDA7?style=flat-square)
-![ESO](https://img.shields.io/badge/External_Secrets-IRSA-FF9900?style=flat-square)
-
-**Observability and Autoscaling**
-
-![Prometheus](https://img.shields.io/badge/Prometheus-Metrics-E6522C?style=flat-square&logo=prometheus&logoColor=white)
-![Grafana](https://img.shields.io/badge/Grafana-Dashboards-F46800?style=flat-square&logo=grafana&logoColor=white)
-![KEDA](https://img.shields.io/badge/KEDA-Autoscaling-326CE5?style=flat-square)
-![Redis](https://img.shields.io/badge/Redis-Rate_Limit-DC382D?style=flat-square&logo=redis&logoColor=white)
-
----
-
-## Request Flow
-
-1. Client sends `POST /query` with `X-API-Key` header to ALB (HTTPS)
-2. ALB terminates TLS using ACM certificate; forwards to Ingress
-3. Ingress routes to **auth-service** — validates key against ESO-synced Secret
-4. auth-service enforces IP allowlist if configured
-5. Request forwarded to **rate-limiter** — checks Redis sliding window (10 req/min)
-6. rate-limiter returns 429 + Retry-After if limit exceeded
-7. Allowed request reaches **rag-api** — embeds question using local sentence-transformers
-8. rag-api queries **Qdrant** — retrieves top-5 chunks by cosine similarity
-9. rag-api sends question + chunks as context to **Claude** via LangChain
-10. Claude generates grounded answer; rag-api returns answer + sources + usage
-11. **metrics-exporter** sidecar records token counts, latency, cost to Prometheus
-12. Prometheus scrapes every 15 seconds; Grafana renders in three dashboards
-
----
+1. A client sends `POST /query` using an API key over HTTPS.
+2. Route 53, ACM, and the Application Load Balancer route the request into EKS.
+3. `auth-service` validates the API key and optional IP allowlist.
+4. `rate-limiter` applies a Redis-backed sliding-window limit (10 requests/minute per key).
+5. `rag-api` embeds the question, retrieves relevant document chunks from Qdrant, and builds a grounded prompt.
+6. LangChain sends the prompt to Claude (or OpenAI through one configuration change).
+7. The API returns the answer, sources, timings, and usage metadata; Prometheus records the operational metrics.
 
 ## Architecture
 
+The rendered diagram above is the quick visual tour. The complete implementation-level architecture is below.
+
 ~~~text
-Internet / API Consumer
-        │ HTTPS :443
-        ▼
-Route 53 ──► ACM certificate ──► Application Load Balancer
-                                            │
-                                            ▼
-                                EKS private cluster / Ingress
-                                            │
-             ┌──────────────────────────────┼──────────────────────────────┐
-             ▼                              ▼                              ▼
-      auth-service                    rate-limiter                      rag-api
-      API-key + IP check              Redis, 10 req/min           embed → retrieve → generate
-                                                                        │          │
-                                                                        ▼          ▼
-                                                                  Qdrant       Claude API
-                                                                  EBS gp3      via LangChain
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                           INTERNET / CLIENT                                      ║
+║                                                                                  ║
+║   User / API Consumer                    Developer / CI Engineer                 ║
+║   POST /query  GET /health               git push → GitHub Actions               ║
+╚══════════════════╦═══════════════════════════════════╦═══════════════════════════╝
+                   ║ HTTPS                             ║ OIDC Token
+                   ▼                                   ▼
+╔══════════════════════════════╗   ╔═══════════════════════════════════════════════╗
+║      ROUTE 53 (DNS)          ║   ║            CI/CD PIPELINE                    ║
+║  api.yourdomain.com          ║   ║                                               ║
+║  → ALB static IP             ║   ║  GitHub Actions                               ║
+╚══════════════╦═══════════════╝   ║  ├── Lint + Test                              ║
+               ║                   ║  ├── Trivy security scan                      ║
+               ▼                   ║  ├── Docker build                             ║
+╔══════════════════════════════╗   ║  ├── Push → ECR                              ║
+║   ACM CERTIFICATE            ║   ║  └── Argo CD sync trigger                    ║
+║   TLS termination            ║   ║                                               ║
+╚══════════════╦═══════════════╝   ║  GitHub OIDC → OIDC_ROLE_ARN (no static creds)║
+               ║                   ╚══════════════════════╦════════════════════════╝
+               ▼                                          ║
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║  AWS REGION: us-east-1                                   Terraform provisions   ║
+║                                                          all infrastructure below║
+║  ╔════════════════════════════════════════════════════════════════════════════╗  ║
+║  ║  VPC: 10.0.0.0/16                                                         ║  ║
+║  ║                                                                            ║  ║
+║  ║  ┌──────────────────────────┐    ┌──────────────────────────────────────┐  ║  ║
+║  ║  │  PUBLIC SUBNET           │    │  PRIVATE SUBNET                      │  ║  ║
+║  ║  │  10.0.1.0/24             │    │  10.0.2.0/24 (nodes)                 │  ║  ║
+║  ║  │                          │    │  10.0.3.0/24 (pods)                  │  ║  ║
+║  ║  │  ALB (HTTPS :443)        │    │                                      │  ║  ║
+║  ║  │  NAT Gateway             │    │  ╔══════════════════════════════════╗ │  ║  ║
+║  ║  │  Bastion (SSM only)      │    │  ║  EKS CLUSTER (private endpoint)  ║ │  ║  ║
+║  ║  └──────────────────────────┘    │  ║  EKS 1.29 · VPC CNI · IRSA      ║ │  ║  ║
+║  ║                                  │  ║                                  ║ │  ║  ║
+║  ║                                  │  ║  ┌────────────────────────────┐  ║ │  ║  ║
+║  ║                                  │  ║  │  SYSTEM NODE GROUP         │  ║ │  ║  ║
+║  ║                                  │  ║  │  t3.medium · on-demand     │  ║ │  ║  ║
+║  ║                                  │  ║  │                            │  ║ │  ║  ║
+║  ║                                  │  ║  │  ns: argocd                │  ║ │  ║  ║
+║  ║                                  │  ║  │  ├── ArgoCD Server         │  ║ │  ║  ║
+║  ║                                  │  ║  │  ├── Repo Server           │  ║ │  ║  ║
+║  ║                                  │  ║  │  └── Application Ctrl      │  ║ │  ║  ║
+║  ║                                  │  ║  │                            │  ║ │  ║  ║
+║  ║                                  │  ║  │  ns: monitoring            │  ║ │  ║  ║
+║  ║                                  │  ║  │  ├── Prometheus            │  ║ │  ║  ║
+║  ║                                  │  ║  │  ├── Grafana               │  ║ │  ║  ║
+║  ║                                  │  ║  │  └── Alertmanager          │  ║ │  ║  ║
+║  ║                                  │  ║  │                            │  ║ │  ║  ║
+║  ║                                  │  ║  │  ns: linkerd               │  ║ │  ║  ║
+║  ║                                  │  ║  │  ├── Control Plane         │  ║ │  ║  ║
+║  ║                                  │  ║  │  └── mTLS auto-inject      │  ║ │  ║  ║
+║  ║                                  │  ║  │                            │  ║ │  ║  ║
+║  ║                                  │  ║  │  ns: cert-manager          │  ║ │  ║  ║
+║  ║                                  │  ║  │  └── DNS-01 via Route53    │  ║ │  ║  ║
+║  ║                                  │  ║  │                            │  ║ │  ║  ║
+║  ║                                  │  ║  │  ns: external-secrets      │  ║ │  ║  ║
+║  ║                                  │  ║  │  └── ESO + IRSA            │  ║ │  ║  ║
+║  ║                                  │  ║  └────────────────────────────┘  ║ │  ║  ║
+║  ║                                  │  ║                                  ║ │  ║  ║
+║  ║                                  │  ║  ┌────────────────────────────┐  ║ │  ║  ║
+║  ║                                  │  ║  │  APPLICATION NODE GROUP    │  ║ │  ║  ║
+║  ║                                  │  ║  │  t3.large · Spot (min: 1)  │  ║ │  ║  ║
+║  ║                                  │  ║  │                            │  ║ │  ║  ║
+║  ║                                  │  ║  │  ns: rag-api               │  ║ │  ║  ║
+║  ║                                  │  ║  │  ├── auth-service           │  ║ │  ║  ║
+║  ║                                  │  ║  │  │   FastAPI · API key auth │  ║ │  ║  ║
+║  ║                                  │  ║  │  │   IP allowlist           │  ║ │  ║  ║
+║  ║                                  │  ║  │  ├── rate-limiter           │  ║ │  ║  ║
+║  ║                                  │  ║  │  │   FastAPI + Redis        │  ║ │  ║  ║
+║  ║                                  │  ║  │  │   10 req/min per key     │  ║ │  ║  ║
+║  ║                                  │  ║  │  ├── rag-api (3 replicas)   │  ║ │  ║  ║
+║  ║                                  │  ║  │  │   FastAPI · LangChain    │  ║ │  ║  ║
+║  ║                                  │  ║  │  │   KEDA ScaledObject      │  ║ │  ║  ║
+║  ║                                  │  ║  │  └── metrics-exporter       │  ║ │  ║  ║
+║  ║                                  │  ║  │      Prometheus metrics     │  ║ │  ║  ║
+║  ║                                  │  ║  │      token counts + latency │  ║ │  ║  ║
+║  ║                                  │  ║  │                            │  ║ │  ║  ║
+║  ║                                  │  ║  │  ns: qdrant                │  ║ │  ║  ║
+║  ║                                  │  ║  │  └── Qdrant (StatefulSet)  │  ║ │  ║  ║
+║  ║                                  │  ║  │      PVC → EBS gp3 20Gi   │  ║ │  ║  ║
+║  ║                                  │  ║  │      REST :6333            │  ║ │  ║  ║
+║  ║                                  │  ║  │      gRPC :6334            │  ║ │  ║  ║
+║  ║                                  │  ║  │      KEDA ScaledObject     │  ║ │  ║  ║
+║  ║                                  │  ║  └────────────────────────────┘  ║ │  ║  ║
+║  ║                                  │  ╚══════════════════════════════════╝ │  ║  ║
+║  ║                                  └──────────────────────────────────────┘  ║  ║
+║  ║                                                                            ║  ║
+║  ║  SUPPORTING AWS SERVICES                                                   ║  ║
+║  ║  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐  ║  ║
+║  ║  │ Secrets      │ │ ECR          │ │ S3           │ │ SNS              │  ║  ║
+║  ║  │ Manager      │ │ Container    │ │ Document     │ │ emmaubani.dev    │  ║  ║
+║  ║  │ API keys     │ │ Registry     │ │ ingestion    │ │ @gmail.com       │  ║  ║
+║  ║  │ Claude key   │ │ rag-api img  │ │ store        │ │ drift alerts     │  ║  ║
+║  ║  └──────────────┘ └──────────────┘ └──────────────┘ └──────────────────┘  ║  ║
+║  ╚════════════════════════════════════════════════════════════════════════════╝  ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
 
-S3 documents ──► ingestion job ──► chunks + embeddings ──► Qdrant
+EXTERNAL SERVICES
+┌─────────────────────────────────────────────────────────┐
+│  Claude API (claude-sonnet-4-6)  ←── rag-api pod        │
+│  LangChain abstraction layer                            │
+│  Provider-agnostic — swap to OpenAI with one env var    │
+└─────────────────────────────────────────────────────────┘
 
-Developer ──► GitHub Actions (OIDC) ──► ECR ──► Argo CD ──► EKS
-Secrets Manager ──► External Secrets Operator / IRSA ──► application pods
-Prometheus ──► metrics scrape ──► Grafana dashboards + Alertmanager/SNS
+REQUEST FLOW
+User → Route53 → ALB (TLS) → Ingress → auth-service
+     → rate-limiter → rag-api → Qdrant (vector search)
+     → Claude API (generation) → response → User
+
+DEPLOYMENT FLOW
+Developer → GitHub → Actions (OIDC) → ECR → Argo CD
+          → sync wave 1 (platform) → wave 2 (security)
+          → wave 3 (rag-api) → EKS
+
+TERRAFORM PROVISIONS
+Terraform → VPC + subnets + NAT → EKS cluster
+          → node groups → IAM/IRSA → ACM cert
+          → Route53 records → ECR → S3 → Secrets Manager
+          → SNS topic → DynamoDB (tf state lock)~~~
+
+### Request and delivery paths
+
+~~~text
+Request path:    Client → Route 53 → ALB → Ingress → auth → rate limit → RAG API → Qdrant + Claude
+Document path:   S3 → ingestion job → chunking + embeddings → Qdrant
+Delivery path:   GitHub → Actions (OIDC) → ECR → Argo CD sync waves → EKS
+Metrics path:    RAG services → Prometheus → Grafana / Alertmanager → SNS
 ~~~
 
-### Infrastructure
+## Production capabilities
 
-| Component | Detail |
-|-----------|--------|
-| Region | us-east-1 |
-| IaC | Terraform 1.5+ with S3 + DynamoDB state |
-| Cluster | EKS 1.29, private endpoint, VPC CNI |
-| System nodes | t3.medium, on-demand, min 2 |
-| Application nodes | t3.large, Spot, min 1 (warm node — no cold start) |
-| Networking | VPC 10.0.0.0/16, public + private subnets, NAT Gateway |
-| TLS | ACM certificate on ALB |
+| Area | What this project demonstrates |
+|---|---|
+| Retrieval | Local `all-MiniLM-L6-v2` embeddings, Qdrant cosine search, source attribution |
+| Generation | Claude via LangChain; provider abstraction supports an OpenAI swap |
+| Security | API keys, optional IP allowlist, rate limiting, Secrets Manager, IRSA, network policies, Linkerd mTLS |
+| Infrastructure | Terraform-managed VPC, EKS, ECR, S3, IAM, Secrets Manager, SNS, DNS/TLS foundations |
+| Delivery | GitHub Actions OIDC, image scanning, ECR publication, Argo CD GitOps sync waves |
+| Scale | KEDA queue-depth trigger, HPA fallback, managed node groups, warm application capacity |
+| Observability | Prometheus metrics, Grafana dashboards, latency, tokens, retrieval time, queue depth, and estimated cost |
 
-### Application Services
+## Tech stack
 
-| Service | Framework | Responsibility |
-|---------|-----------|---------------|
-| auth-service | FastAPI | API key validation via ESO-synced Secret; IP allowlist |
-| rate-limiter | FastAPI + Redis | Sliding window 10 req/min per key; 429 + Retry-After |
-| rag-api | FastAPI + LangChain | Embedding, Qdrant retrieval, Claude generation |
-| metrics-exporter | FastAPI + prometheus-client | Token counts, latency histograms, cost estimate |
-| ingestion | Python + LangChain | S3 download, chunking, embedding, Qdrant store |
-| qdrant | StatefulSet | Vector storage; EBS gp3 20Gi PVC; REST + gRPC |
+| Layer | Technologies |
+|---|---|
+| API and AI | Python 3.11, FastAPI, LangChain, Claude API, sentence-transformers |
+| Retrieval | Qdrant, EBS gp3 persistent volumes, S3 document store |
+| Kubernetes | Amazon EKS, Argo CD, Linkerd, KEDA, External Secrets Operator |
+| Cloud | AWS VPC, ALB, ACM, Route 53, ECR, Secrets Manager, SNS, IAM/IRSA |
+| Observability | kube-prometheus-stack, Prometheus, Grafana, Alertmanager |
+| Delivery | Terraform, GitHub Actions, GitHub OIDC, Trivy |
 
----
-## Security — Defense in Depth
-
-Each layer assumes the layer above may be compromised.
-
-1. **Network perimeter** — Security groups restrict ALB to 80/443; EKS nodes unreachable from internet
-2. **TLS** — ACM certificate terminates at ALB; HTTP-only inside VPC over private subnets
-3. **Authentication** — API keys stored in Secrets Manager; synced to pods via ESO + IRSA; no static AWS credentials anywhere in-cluster
-4. **IP allowlist** — Valid keys from unexpected source IPs are rejected at auth-service
-5. **Rate limiting** — Sliding window per key prevents abuse even with a valid key
-6. **Service mesh mTLS** — Linkerd auto-injects mTLS into rag-api and qdrant namespaces; all pod-to-pod traffic encrypted
-7. **Network policies** — Default-deny in rag-api and qdrant namespaces; explicit allow rules only for documented traffic paths
-
----
-
-## Autoscaling
-
-- **Pod scaling** — KEDA ScaledObject on `sum(rag_queue_depth)` Prometheus metric; second pod at queue depth > 3
-- **Node scaling** — EKS managed node group scales 1→5 as KEDA adds pods that cannot be scheduled
-- **Warm node** — Application node group minimum is 1, never 0; Spot instance is pre-warmed to avoid cold-start latency
-- **Spot interruption** — EKS handles interruption notice; pod reschedules onto remaining or new node; warm minimum absorbs the gap
-
----
-
-## Observability
-
-**Stack:** kube-prometheus-stack (Prometheus, Grafana, Alertmanager,
-node-exporter, kube-state-metrics) + custom metrics-exporter sidecar
-
-**Dashboards:**
-
-| Dashboard | What It Shows |
-|-----------|--------------|
-| Cluster Overview | Node CPU/memory, pod health by namespace, RAG API replica count |
-| Inference Metrics | Request rate, p50/p95/p99 latency, error rate, queue depth, retrieval latency |
-| LLM Metrics | Tokens/min, prompt vs completion split, estimated cost/hour, chunks retrieved, generation duration |
-
-**metrics-exporter extracts from every response:**
-- `rag_prompt_tokens_total` — prompt tokens sent to Claude
-- `rag_completion_tokens_total` — completion tokens received
-- `rag_total_tokens_total` — combined
-- `rag_token_cost_usd_total` — estimated USD cost
-- `rag_retrieval_duration_seconds` — Qdrant search latency
-- `rag_chunks_retrieved` — chunks per query
-- `rag_queue_depth` — active in-flight requests (drives KEDA)
-- `rag_request_duration_seconds` — end-to-end latency histogram
-
----
-
-## What's Implemented
-
-- [x] Production RAG pipeline — embed, retrieve, generate with source attribution
-- [x] Provider-agnostic LLM — swap Claude for OpenAI via single env var
-- [x] Self-hosted embedding — sentence-transformers/all-MiniLM-L6-v2 (no external API call for embeddings)
-- [x] Auth service — API key validation from Secrets Manager via ESO + IRSA
-- [x] IP allowlist — per-key source IP enforcement
-- [x] Rate limiting — sliding window, 10 req/min, Redis-backed, 429 + Retry-After
-- [x] Linkerd mTLS — all pod-to-pod traffic encrypted at L4
-- [x] Network policies — default-deny + explicit allow rules in rag-api and qdrant namespaces
-- [x] KEDA autoscaling — queue depth metric drives pod scaling
-- [x] Warm Spot node — min 1 application node, never cold-start
-- [x] GitOps via Argo CD — sync waves: platform → security → application
-- [x] GitHub Actions OIDC — no static AWS credentials in CI
-- [x] Trivy scanning — blocks on CRITICAL before push to ECR
-- [x] kube-prometheus-stack — metrics, alerting, dashboards
-- [x] Three Grafana dashboards — cluster, inference, LLM-specific
-- [x] Estimated cost/hour Prometheus metric
-- [x] Document ingestion pipeline — S3 → chunk → embed → Qdrant
-- [x] EBS gp3 encrypted PVC for Qdrant persistence
-- [x] Terraform remote state — S3 + DynamoDB lock
-- [x] SNS alerts — emmaubani.dev@gmail.com
-
-**Required GitHub Repository Secrets**
-
-| Secret | Description |
-|--------|-------------|
-| `AWS_ACCOUNT_ID` | Your AWS account ID |
-| `AWS_REGION` | Target region (us-east-1) |
-| `ECR_REPOSITORY` | ECR repository base path |
-| `OIDC_ROLE_ARN` | IAM role for GitHub Actions OIDC |
-| `CLUSTER_NAME` | EKS cluster name |
-
----
-
-## Directory Structure
+## Repository map
 
 ~~~text
 rag-pipeline/
-├── .github/
-│   └── workflows/
-│       ├── ci.yml                         # Test, scan, build, publish
-│       └── deploy.yml                     # GitOps deployment workflow
+├── .github/workflows/              # CI and GitOps delivery workflows
 ├── apps/
-│   ├── auth-service/
-│   │   ├── main.py
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   ├── ingestion/
-│   │   ├── ingest.py
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   ├── metrics-exporter/
-│   │   ├── main.py
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   ├── rag-api/
-│   │   ├── main.py
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   └── rate-limiter/
-│       ├── main.py
-│       ├── Dockerfile
-│       └── requirements.txt
+│   ├── rag-api/                    # Retrieval and generation API
+│   ├── auth-service/               # API-key and IP validation
+│   ├── rate-limiter/               # Redis sliding-window protection
+│   ├── metrics-exporter/           # Prometheus-friendly RAG metrics
+│   └── ingestion/                  # S3 → chunks → Qdrant pipeline
 ├── docs/
-│   ├── architecture/
-│   │   ├── architecture.png              # Production architecture diagram
-│   │   ├── architecture.mermaid          # Editable diagram source
-│   │   └── architecture.md
-│   └── images/
-│       └── rag-pipeline-architecture.png
+│   ├── architecture/               # PNG, Mermaid source, architecture notes
+│   └── images/                     # Supporting project imagery
 ├── k8s/
-│   ├── argocd/app-of-apps.yaml
-│   ├── autoscaling/keda-scaledobject.yaml
-│   ├── deployments/
-│   │   ├── auth-service.yaml
-│   │   ├── qdrant.yaml
-│   │   ├── rag-api.yaml
-│   │   └── rate-limiter.yaml
-│   ├── external-secrets/cluster-secret-store.yaml
-│   ├── monitoring/grafana-dashboards.yaml
-│   ├── namespaces/namespaces.yaml
-│   ├── network-policies/rag-api-netpol.yaml
-│   ├── base.yaml
-│   └── ingress.yaml
-├── scripts/
-│   ├── bootstrap.sh
-│   ├── destroy.sh
-│   └── verify.sh
-├── terraform/
-│   ├── environments/{dev,prod}/
-│   ├── modules/{vpc,eks,iam,ecr,secrets,s3,dns}/
-│   ├── main.tf
-│   ├── outputs.tf
-│   ├── terraform.tfvars
-│   ├── variables.tf
-│   └── versions.tf
-├── .env.example
-├── .gitignore
-├── docker-compose.yml
+│   ├── argocd/                     # App-of-Apps and sync waves
+│   ├── autoscaling/                # KEDA and HPA resources
+│   ├── deployments/                # API, auth, limiter, Qdrant workloads
+│   ├── external-secrets/           # Secrets Manager integration
+│   ├── monitoring/                 # Grafana dashboards
+│   ├── namespaces/                 # Namespace and mesh labels
+│   └── network-policies/           # Default-deny and explicit traffic paths
+├── scripts/                        # Bootstrap, verification, teardown
+├── terraform/                      # Cloud infrastructure and reusable modules
+├── docker-compose.yml              # Local development stack
 └── README.md
 ~~~
 
----
-## Deployment
+## Quick start
 
-### Prerequisites
-
-Replace these placeholders before running:
-
-| File | Line | Replace With |
-|------|------|-------------|
-| `terraform/versions.tf` | `bucket = "YOUR_TFSTATE_BUCKET"` | Your S3 state bucket name |
-| `terraform/terraform.tfvars` | `domain_name = "api.yourdomain.com"` | Your actual domain |
-| `k8s/deployments/*.yaml` | `YOUR_ACCOUNT_ID` | Your AWS account ID |
-| `k8s/deployments/rag-api.yaml` | `YOUR_RAG_API_ROLE_ARN` | IRSA role ARN from terraform output |
-
-See [terraform/README.md](terraform/README.md) for infrastructure details.
-See [k8s/README.md](k8s/README.md) for Kubernetes deployment details.
-
-> **⚠️ Warning:** The bootstrap script installs Linkerd, KEDA, ESO,
-> kube-prometheus-stack, and Argo CD before applying application
-> manifests. These must be healthy before application pods start.
-> Check each with `kubectl get pods -n <namespace>` before proceeding.
+> Local mode is useful for API development. AWS credentials, an Anthropic key, and EKS are only needed for the cloud deployment path.
 
 ```bash
-# Export Claude API key (never committed to git)
-export TF_VAR_claude_api_key="sk-ant-YOUR_KEY"
+cd "C:\Projects\Production RAG Pipeline"
+copy .env.example .env
+# Add ANTHROPIC_API_KEY to .env
 
-# Run full bootstrap
+docker compose up --build
+curl http://localhost:8000/health
+```
+
+For ingestion, upload supported `.pdf`, `.txt`, `.md`, or `.rst` documents to an S3 prefix, then run the ingestion workload with its S3 bucket and prefix.
+
+## AWS EKS deployment
+
+Before bootstrap, configure these environment-specific values. Never commit an actual API key or Terraform state credentials.
+
+| Location | Configure |
+|---|---|
+| `terraform/versions.tf` | Terraform state bucket and DynamoDB lock table |
+| `terraform/terraform.tfvars` | Domain name, AWS region, CIDRs, and sizing values |
+| `k8s/deployments/*.yaml` | AWS account ID, image tags, and IRSA role ARNs |
+| GitHub repository secrets | AWS account ID, region, ECR repository, OIDC role ARN, and cluster name |
+
+```bash
+export TF_VAR_claude_api_key="sk-ant-REPLACE_ME"
 bash scripts/bootstrap.sh
-
-# Verify deployment
 bash scripts/verify.sh
+```
 
-# Destroy when done
+The bootstrap process provisions Terraform resources, configures `kubectl`, installs Linkerd, KEDA, External Secrets Operator, kube-prometheus-stack, and Argo CD, then applies the application manifests.
+
+## What to monitor
+
+The Grafana dashboards are meant to answer four simple questions quickly:
+
+- **Is the platform healthy?** Node capacity, pod health, replica count, errors.
+- **Is it fast?** Request rate and p50/p95/p99 end-to-end and retrieval latency.
+- **Is it useful?** Chunks retrieved and response/source behavior.
+- **What is it costing?** Prompt tokens, completion tokens, total tokens, and estimated cost per hour.
+
+## Portfolio screenshot checklist
+
+Use these in a LinkedIn carousel, README update, or technical write-up:
+
+1. The architecture image above — the project story in one slide.
+2. `terraform output` showing the provisioned EKS, S3, ECR, and supporting resources.
+3. Ingestion job logs proving document chunks were written to Qdrant.
+4. A `POST /query` response showing the answer, source chunks, token usage, and timings.
+5. Rate limiting: 10 allowed requests followed by a `429` response and `Retry-After` header.
+6. Argo CD showing healthy applications and sync waves.
+7. Grafana LLM metrics showing tokens/minute, cost/hour, latency, and queue depth.
+
+## Safety and cleanup
+
+This deployment creates billable AWS resources, including EKS, NAT Gateway, ALB, storage, and compute. Capture your screenshots first, then remove the stack:
+
+```bash
 bash scripts/destroy.sh
 ```
 
-[END README]
+## Learning outcomes
+
+By working through this repository, you practice more than RAG itself: running stateful vector workloads on Kubernetes, managing cloud secrets through IRSA, GitOps delivery, workload autoscaling, service-to-service security, and making LLM usage measurable in operational terms.
+
+---
+
+Built as a portfolio project for production AI infrastructure engineering.
