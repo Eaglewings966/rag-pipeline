@@ -1,0 +1,90 @@
+# App-of-Apps pattern — ArgoCD manages all applications
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rag-pipeline-apps
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Eaglewings966/rag-pipeline
+    targetRevision: main
+    path: k8s/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Wave 1 — Platform services
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-services
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Eaglewings966/rag-pipeline
+    targetRevision: main
+    path: k8s/platform
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Wave 2 — Security and secrets
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: security-services
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Eaglewings966/rag-pipeline
+    targetRevision: main
+    path: k8s/external-secrets
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+---
+# Wave 3 — Application services
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rag-application
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Eaglewings966/rag-pipeline
+    targetRevision: main
+    path: k8s/deployments
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

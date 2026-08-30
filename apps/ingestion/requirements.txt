@@ -1,0 +1,9 @@
+boto3==1.35.81
+langchain-community==0.3.13
+langchain-text-splitters==0.3.4
+langchain-huggingface==0.1.2
+langchain-qdrant==0.2.0
+sentence-transformers==3.3.1
+qdrant-client==1.12.1
+pypdf==5.1.0
+unstructured==0.16.11

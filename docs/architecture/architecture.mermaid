@@ -1,0 +1,8 @@
+flowchart LR
+  Client --> ALB[ALB / TLS]
+  ALB --> API[RAG API]
+  API --> Qdrant
+  API --> LLM[Claude API]
+  S3 --> Ingest[Ingestion Job]
+  Ingest --> Qdrant
+  CI[GitHub Actions] --> ECR --> ArgoCD --> EKS

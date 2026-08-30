@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rate-limiter
+  namespace: rag-api
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: rate-limiter
+  template:
+    metadata:
+      labels:
+        app: rate-limiter
+    spec:
+      nodeSelector:
+        role: application
+      containers:
+        - name: rate-limiter
+          image: YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/rag-pipeline/rate-limiter:latest
+          ports:
+            - containerPort: 8002
+          env:
+            - name: REDIS_URL
+              value: "redis://redis.rag-api.svc.cluster.local:6379/0"
+            - name: RATE_LIMIT_PER_MINUTE
+              value: "10"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 15
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rate-limiter
+  namespace: rag-api
+spec:
+  selector:
+    app: rate-limiter
+  ports:
+    - port: 80
+      targetPort: 8002
+  type: ClusterIP
+---
+# Redis for rate limiter state
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: rag-api
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      nodeSelector:
+        role: application
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          command: ["redis-server", "--maxmemory", "256mb",
+                    "--maxmemory-policy", "allkeys-lru"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: rag-api
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+  type: ClusterIP

@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rag-api
+  labels:
+    linkerd.io/inject: enabled
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-api
+  namespace: rag-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: rag-api}
+  template:
+    metadata:
+      labels: {app: rag-api}
+    spec:
+      containers:
+        - name: api
+          image: YOUR_ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/rag-api:latest
+          ports: [{containerPort: 8000}]
+          envFrom: [{secretRef: {name: rag-api-secrets}}]
+          readinessProbe: {httpGet: {path: /health, port: 8000}}
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "1", memory: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: rag-api, namespace: rag-api}
+spec:
+  selector: {app: rag-api}
+  ports: [{port: 80, targetPort: 8000}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: rag-api, namespace: rag-api}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: rag-api}
+  minReplicas: 3
+  maxReplicas: 10
+  metrics: [{type: Resource, resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}}]

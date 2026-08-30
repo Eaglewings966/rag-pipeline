@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: rag-api
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      nodeSelector:
+        role: application
+      containers:
+        - name: auth-service
+          image: YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/rag-pipeline/auth-service:latest
+          ports:
+            - containerPort: 8001
+          env:
+            - name: API_KEYS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: rag-api-keys
+                  key: API_KEYS_JSON
+            - name: IP_ALLOWLIST_JSON
+              valueFrom:
+                configMapKeyRef:
+                  name: auth-config
+                  key: ip_allowlist
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: rag-api
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - port: 80
+      targetPort: 8001
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-config
+  namespace: rag-api
+data:
+  # IP allowlist per API key
+  # Format: {"key_prefix": ["ip1", "ip2"]}
+  # Empty means all IPs allowed for that key
+  ip_allowlist: "{}"
