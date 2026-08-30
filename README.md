@@ -117,6 +117,31 @@ This pipeline shows what the production version actually requires.
 
 ## Architecture
 
+~~~text
+Internet / API Consumer
+        │ HTTPS :443
+        ▼
+Route 53 ──► ACM certificate ──► Application Load Balancer
+                                            │
+                                            ▼
+                                EKS private cluster / Ingress
+                                            │
+             ┌──────────────────────────────┼──────────────────────────────┐
+             ▼                              ▼                              ▼
+      auth-service                    rate-limiter                      rag-api
+      API-key + IP check              Redis, 10 req/min           embed → retrieve → generate
+                                                                        │          │
+                                                                        ▼          ▼
+                                                                  Qdrant       Claude API
+                                                                  EBS gp3      via LangChain
+
+S3 documents ──► ingestion job ──► chunks + embeddings ──► Qdrant
+
+Developer ──► GitHub Actions (OIDC) ──► ECR ──► Argo CD ──► EKS
+Secrets Manager ──► External Secrets Operator / IRSA ──► application pods
+Prometheus ──► metrics scrape ──► Grafana dashboards + Alertmanager/SNS
+~~~
+
 ### Infrastructure
 
 | Component | Detail |
@@ -141,7 +166,6 @@ This pipeline shows what the production version actually requires.
 | qdrant | StatefulSet | Vector storage; EBS gp3 20Gi PVC; REST + gRPC |
 
 ---
-
 ## Security — Defense in Depth
 
 Each layer assumes the layer above may be compromised.
@@ -227,30 +251,73 @@ node-exporter, kube-state-metrics) + custom metrics-exporter sidecar
 
 ## Directory Structure
 
+~~~text
 rag-pipeline/
-├── terraform/ # All AWS infrastructure — VPC, EKS, IAM, ECR, S3
-├── k8s/ # All Kubernetes manifests — namespaces to autoscaling
-│ ├── namespaces/ # Namespace definitions with Linkerd injection labels
-│ ├── deployments/ # rag-api, auth-service, rate-limiter, qdrant
-│ ├── autoscaling/ # KEDA ScaledObjects and HPA
-│ ├── network-policies/ # Default-deny + explicit allow rules
-│ ├── external-secrets/ # ClusterSecretStore and ExternalSecret CRDs
-│ ├── monitoring/ # Grafana dashboard ConfigMaps
-│ └── argocd/ # App-of-Apps manifests with sync waves
-├── apps/ # Application source code
-│ ├── rag-api/ # FastAPI + LangChain + Qdrant retrieval + Claude
-│ ├── auth-service/ # API key validation + IP allowlist
-│ ├── rate-limiter/ # Sliding window rate limiter + Redis
-│ ├── metrics-exporter/ # Prometheus proxy — token counts + cost
-│ └── ingestion/ # S3 → chunk → embed → Qdrant pipeline
+├── .github/
+│   └── workflows/
+│       ├── ci.yml                         # Test, scan, build, publish
+│       └── deploy.yml                     # GitOps deployment workflow
+├── apps/
+│   ├── auth-service/
+│   │   ├── main.py
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   ├── ingestion/
+│   │   ├── ingest.py
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   ├── metrics-exporter/
+│   │   ├── main.py
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   ├── rag-api/
+│   │   ├── main.py
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   └── rate-limiter/
+│       ├── main.py
+│       ├── Dockerfile
+│       └── requirements.txt
 ├── docs/
-│ └── architecture/ # architecture.png, .drawio, .mermaid
-├── scripts/ # bootstrap.sh, verify.sh, destroy.sh
-└── .github/workflows/ # ci.yml — lint, scan, build, push, deploy
-
+│   ├── architecture/
+│   │   ├── architecture.png              # Production architecture diagram
+│   │   ├── architecture.mermaid          # Editable diagram source
+│   │   └── architecture.md
+│   └── images/
+│       └── rag-pipeline-architecture.png
+├── k8s/
+│   ├── argocd/app-of-apps.yaml
+│   ├── autoscaling/keda-scaledobject.yaml
+│   ├── deployments/
+│   │   ├── auth-service.yaml
+│   │   ├── qdrant.yaml
+│   │   ├── rag-api.yaml
+│   │   └── rate-limiter.yaml
+│   ├── external-secrets/cluster-secret-store.yaml
+│   ├── monitoring/grafana-dashboards.yaml
+│   ├── namespaces/namespaces.yaml
+│   ├── network-policies/rag-api-netpol.yaml
+│   ├── base.yaml
+│   └── ingress.yaml
+├── scripts/
+│   ├── bootstrap.sh
+│   ├── destroy.sh
+│   └── verify.sh
+├── terraform/
+│   ├── environments/{dev,prod}/
+│   ├── modules/{vpc,eks,iam,ecr,secrets,s3,dns}/
+│   ├── main.tf
+│   ├── outputs.tf
+│   ├── terraform.tfvars
+│   ├── variables.tf
+│   └── versions.tf
+├── .env.example
+├── .gitignore
+├── docker-compose.yml
+└── README.md
+~~~
 
 ---
-
 ## Deployment
 
 ### Prerequisites
