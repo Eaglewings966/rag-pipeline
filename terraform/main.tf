@@ -28,8 +28,8 @@ resource "aws_vpc" "main" {
   enable_dns_support   = true
 
   tags = {
-    Name                                              = "${var.project_name}-vpc"
-    "kubernetes.io/cluster/${var.cluster_name}"       = "shared"
+    Name                                        = "${var.project_name}-vpc"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
   }
 }
 
@@ -48,9 +48,9 @@ resource "aws_subnet" "public" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name                                              = "${var.project_name}-public-${count.index + 1}"
-    "kubernetes.io/cluster/${var.cluster_name}"       = "shared"
-    "kubernetes.io/role/elb"                          = "1"
+    Name                                        = "${var.project_name}-public-${count.index + 1}"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                    = "1"
   }
 }
 
@@ -62,9 +62,9 @@ resource "aws_subnet" "private" {
   availability_zone = data.aws_availability_zones.available.names[count.index]
 
   tags = {
-    Name                                              = "${var.project_name}-private-${count.index + 1}"
-    "kubernetes.io/cluster/${var.cluster_name}"       = "shared"
-    "kubernetes.io/role/internal-elb"                 = "1"
+    Name                                        = "${var.project_name}-private-${count.index + 1}"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    "kubernetes.io/role/internal-elb"           = "1"
   }
 }
 
@@ -156,10 +156,10 @@ resource "aws_security_group" "eks_nodes" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    from_port = 0
-    to_port   = 0
-    protocol  = "-1"
-    self      = true
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    self        = true
     description = "Node to node communication"
   }
 
@@ -245,13 +245,13 @@ resource "aws_eks_cluster" "main" {
   role_arn = aws_iam_role.eks_cluster.arn
 
   vpc_config {
-    subnet_ids              = concat(
+    subnet_ids = concat(
       aws_subnet.private[*].id,
       aws_subnet.public[*].id
     )
     security_group_ids      = [aws_security_group.eks_nodes.id]
     endpoint_private_access = true
-    endpoint_public_access  = true  # Restrict to bastion CIDR in prod
+    endpoint_public_access  = true # Restrict to bastion CIDR in prod
     public_access_cidrs     = ["0.0.0.0/0"]
   }
 
@@ -301,7 +301,7 @@ resource "aws_eks_node_group" "system" {
   }
 
   labels = {
-    role = "system"
+    role       = "system"
     node-group = "system"
   }
 
@@ -331,8 +331,8 @@ resource "aws_eks_node_group" "application" {
   capacity_type  = "SPOT"
 
   scaling_config {
-    desired_size = 1  # One warm node always available
-    min_size     = 1  # Never scale to zero — avoid cold start
+    desired_size = 1 # One warm node always available
+    min_size     = 1 # Never scale to zero — avoid cold start
     max_size     = 5
   }
 
@@ -456,12 +456,6 @@ resource "aws_secretsmanager_secret" "claude_api_key" {
   tags                    = { Name = "${var.project_name}-claude-key" }
 }
 
-resource "aws_secretsmanager_secret_version" "claude_api_key" {
-  secret_id     = aws_secretsmanager_secret.claude_api_key.id
-  secret_string = jsonencode({
-    api_key = var.claude_api_key
-  })
-}
 
 resource "aws_secretsmanager_secret" "rag_api_keys" {
   name                    = "${var.project_name}/api-keys"
@@ -470,7 +464,7 @@ resource "aws_secretsmanager_secret" "rag_api_keys" {
 }
 
 resource "aws_secretsmanager_secret_version" "rag_api_keys" {
-  secret_id     = aws_secretsmanager_secret.rag_api_keys.id
+  secret_id = aws_secretsmanager_secret.rag_api_keys.id
   secret_string = jsonencode({
     key_1 = "rag-key-${random_id.api_key_1.hex}"
     key_2 = "rag-key-${random_id.api_key_2.hex}"

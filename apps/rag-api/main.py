@@ -17,9 +17,10 @@ import time
 import logging
 import uuid
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+import httpx
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -63,6 +64,8 @@ CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 TOP_K_CHUNKS = int(os.environ.get("TOP_K_CHUNKS", "5"))
 SIMILARITY_THRESHOLD = float(os.environ.get("SIMILARITY_THRESHOLD", "0.7"))
+AUTH_SERVICE_URL = os.environ.get("AUTH_SERVICE_URL", "http://auth-service.rag-api.svc.cluster.local/validate")
+RATE_LIMITER_URL = os.environ.get("RATE_LIMITER_URL", "http://rate-limiter.rag-api.svc.cluster.local/check")
 
 # -------------------------------------------------------
 # INITIALIZATION
@@ -229,8 +232,36 @@ async def health():
     }
 
 
+async def enforce_request_security(request: Request) -> None:
+    """Validate the caller and enforce its rate limit before running the LLM."""
+    headers = {}
+    for name in ("X-API-Key", "Authorization", "X-Forwarded-For"):
+        value = request.headers.get(name)
+        if value:
+            headers[name] = value
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            auth_response = await client.post(AUTH_SERVICE_URL, headers=headers)
+            if auth_response.status_code != 200:
+                raise HTTPException(status_code=auth_response.status_code, detail="Request authentication failed")
+
+            rate_response = await client.post(RATE_LIMITER_URL, headers=headers)
+            if rate_response.status_code != 200:
+                retry_after = rate_response.headers.get("Retry-After")
+                response_headers = {"Retry-After": retry_after} if retry_after else None
+                raise HTTPException(
+                    status_code=rate_response.status_code,
+                    detail="Rate limit exceeded",
+                    headers=response_headers
+                )
+    except HTTPException:
+        raise
+    except httpx.HTTPError as exc:
+        logger.error("Security service unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="Request security service unavailable") from exc
 @app.post("/query", response_model=QueryResponse)
-async def query(request: QueryRequest):
+async def query(request: QueryRequest, _: None = Depends(enforce_request_security)):
     """
     Query the RAG pipeline.
 

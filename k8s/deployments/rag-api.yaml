@@ -47,6 +47,10 @@ spec:
               value: "documents"
             - name: LLM_PROVIDER
               value: "anthropic"
+            - name: AUTH_SERVICE_URL
+              value: "http://auth-service.rag-api.svc.cluster.local/validate"
+            - name: RATE_LIMITER_URL
+              value: "http://rate-limiter.rag-api.svc.cluster.local/check"
             - name: TOP_K_CHUNKS
               value: "5"
             - name: SIMILARITY_THRESHOLD

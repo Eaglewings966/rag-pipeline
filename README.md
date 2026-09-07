@@ -3,7 +3,7 @@
 # Production RAG Pipeline
 
 [![CI](https://github.com/Eaglewings966/rag-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/Eaglewings966/rag-pipeline/actions/workflows/ci.yml)
-[![Kubernetes](https://img.shields.io/badge/Kubernetes-EKS_1.29-326CE5?style=flat-square&logo=kubernetes&logoColor=white)](https://kubernetes.io/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-EKS_1.35-326CE5?style=flat-square&logo=kubernetes&logoColor=white)](https://kubernetes.io/)
 [![Terraform](https://img.shields.io/badge/Terraform-1.5+-7B42BC?style=flat-square&logo=terraform&logoColor=white)](https://www.terraform.io/)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![AWS](https://img.shields.io/badge/AWS-EKS_%2B_Qdrant-FF9900?style=flat-square&logo=amazonaws&logoColor=white)](https://aws.amazon.com/)
@@ -75,7 +75,7 @@ The rendered diagram above is the quick visual tour. The complete implementation
 ║  ║  │  ALB (HTTPS :443)        │    │                                      │  ║  ║
 ║  ║  │  NAT Gateway             │    │  ╔══════════════════════════════════╗ │  ║  ║
 ║  ║  │  Bastion (SSM only)      │    │  ║  EKS CLUSTER (private endpoint)  ║ │  ║  ║
-║  ║  └──────────────────────────┘    │  ║  EKS 1.29 · VPC CNI · IRSA      ║ │  ║  ║
+║  ║  └──────────────────────────┘    │  ║  EKS 1.35 · VPC CNI · IRSA      ║ │  ║  ║
 ║  ║                                  │  ║                                  ║ │  ║  ║
 ║  ║                                  │  ║  ┌────────────────────────────┐  ║ │  ║  ║
 ║  ║                                  │  ║  │  SYSTEM NODE GROUP         │  ║ │  ║  ║
@@ -245,17 +245,21 @@ Before bootstrap, configure these environment-specific values. Never commit an a
 | Location | Configure |
 |---|---|
 | `terraform/versions.tf` | Terraform state bucket and DynamoDB lock table |
-| `terraform/terraform.tfvars` | Domain name, AWS region, CIDRs, and sizing values |
+| `terraform/terraform.tfvars` | AWS region, CIDRs, sizing values, and alert email |
 | `k8s/deployments/*.yaml` | AWS account ID, image tags, and IRSA role ARNs |
 | GitHub repository secrets | AWS account ID, region, ECR repository, OIDC role ARN, and cluster name |
 
+Create the state bucket and DynamoDB lock table first, then export the bucket name. The bootstrap script passes this value to Terraform, so `terraform/versions.tf` does not need to be edited:
+
 ```bash
-export TF_VAR_claude_api_key="sk-ant-REPLACE_ME"
+export TFSTATE_BUCKET="your-unique-terraform-state-bucket"
 bash scripts/bootstrap.sh
 bash scripts/verify.sh
 ```
 
-The bootstrap process provisions Terraform resources, configures `kubectl`, installs Linkerd, KEDA, External Secrets Operator, kube-prometheus-stack, and Argo CD, then applies the application manifests.
+The bootstrap process asks for the Anthropic key without sending it to Terraform, provisions the infrastructure after plan confirmation, configures `kubectl`, installs the AWS Load Balancer Controller, Linkerd, KEDA, External Secrets Operator, kube-prometheus-stack, and Argo CD, then applies the application manifests.
+
+The demo ingress provisions an internet-facing HTTP ALB and does not require Route 53 or ACM. After bootstrap, get its public DNS name with `kubectl get ingress -n rag-api`. For a real production domain, add ACM HTTPS and Route 53 records before exposing the API publicly.
 
 ## What to monitor
 

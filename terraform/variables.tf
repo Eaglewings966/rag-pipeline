@@ -49,7 +49,7 @@ variable "cluster_name" {
 variable "cluster_version" {
   description = "EKS Kubernetes version"
   type        = string
-  default     = "1.29"
+  default     = "1.35"
 }
 
 variable "system_node_instance_type" {
@@ -74,11 +74,4 @@ variable "domain_name" {
   description = "Domain name for the API"
   type        = string
   default     = "api.yourdomain.com"
-}
-
-variable "claude_api_key" {
-  description = "Claude API key (stored in Secrets Manager)"
-  type        = string
-  sensitive   = true
-  default     = ""
 }

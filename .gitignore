@@ -8,3 +8,6 @@ __pycache__/
 *.tfstate.*
 terraform.tfvars
 *.pem
+
+.bootstrap-credentials
+iam_policy.json
